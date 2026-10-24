@@ -1270,7 +1270,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (handleSettingsKey(event)) return true;
-        if (terminal != null) return super.dispatchKeyEvent(event);
+        if (terminal != null) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN) terminal.finishAnimations();
+            return super.dispatchKeyEvent(event);
+        }
         if (tileMenuEnabled && !reordering && openPopup == null && cardPrompt == null
                 && event.getKeyCode() == KeyEvent.KEYCODE_MENU) {
             int position = focusedTilePosition();
@@ -1735,6 +1738,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private void setUpTerminalHome(Bundle savedInstanceState) {
         boolean trendingOn = getResources().getBoolean(R.bool.trending_hero) && !BuildConfig.TMDB_API_KEY.isEmpty();
         if (trendingOn) trending = new Trending(this, BuildConfig.TMDB_API_KEY, getString(R.string.trending_region));
+        Term.motionAllowed = animations && !reducedMotion;
         terminal = new TerminalHome(this, new TerminalHome.Host() {
             @Override public void open(Intent intent) {
                 MainActivity.this.open(intent);

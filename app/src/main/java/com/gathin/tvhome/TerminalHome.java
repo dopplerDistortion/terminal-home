@@ -8,6 +8,8 @@ import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.graphics.Canvas;
+import android.graphics.Paint;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
@@ -89,7 +91,8 @@ final class TerminalHome {
     private final TextView appsCount;
     private final RecyclerView grid;
     private final AppsAdapter appsAdapter = new AppsAdapter();
-    private final LinearLayout systemRows;
+    private final RingLayout systemRows;
+    private final List<RingLayout> rings = new ArrayList<>();
     /** Per header: the status square, the status, the date and the clock. */
     private final List<View[]> headers = new ArrayList<>();
     private TextView refreshHint;
@@ -98,6 +101,34 @@ final class TerminalHome {
     private TermTile menuTile;
 
     private List<String> dockPkgs;
+    private String clockText = "";
+
+    /** First start of Home since the TV booted: the header's path and clock type in. */
+    private boolean bootLines;
+    private static final long TYPE_STEP_MS = 60;   // 13 characters at most: done in well under 1.2 s
+    /** Characters of path and clock typed so far, or -1 when the header is complete. */
+    private int typed = -1;
+    private final Runnable typeStep = new Runnable() {
+        @Override public void run() {
+            typed++;
+            if (typed >= headerPath(0).length() + clockText.length()) typed = -1;
+            else handler.postDelayed(this, TYPE_STEP_MS);
+            showTyped();
+        }
+    };
+
+    private static final int BLINKS = 5;
+    private int blinksLeft;
+    private View blinking;
+    /** The header cursor: five blinks of a second each, then solid. */
+    private final Runnable blink = new Runnable() {
+        @Override public void run() {
+            boolean on = blinking.getVisibility() != View.VISIBLE;
+            blinking.setVisibility(on ? View.VISIBLE : View.INVISIBLE);
+            if (on) blinksLeft--;
+            if (!on || blinksLeft > 0) handler.postDelayed(this, 500);
+        }
+    };
     private int returnTile;
 
     private final Runnable tick = new Runnable() {
@@ -115,6 +146,14 @@ final class TerminalHome {
         pm = activity.getPackageManager();
         prefs = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         dockPkgs = loadDock();
+
+        // Boot time to the second, kept so a later start of Home (after an app, after an update) is not taken for
+        // a fresh boot. Its jitter between calls is milliseconds; a minute of slack keeps it stable.
+        long bootAt = System.currentTimeMillis() - android.os.SystemClock.elapsedRealtime();
+        if (Math.abs(prefs.getLong("boot_at", 0) - bootAt) > 60_000) {
+            prefs.edit().putLong("boot_at", bootAt).apply();
+            bootLines = Term.motion();
+        }
 
         root = new FrameLayout(activity);
         root.setBackground(new Term.DotGrid(activity));
@@ -165,10 +204,13 @@ final class TerminalHome {
                 if (focused) onDockFocused(slot);
             });
             dock[i] = tile;
-            dockRow.addView(tile, new LinearLayout.LayoutParams(0, dp(88) + 2 * tileOut, 1f));
+            LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(0, dp(88) + 2 * tileOut, 1f);
+            tl.setMargins(-dp(TermTile.TRIM_DP), 0, -dp(TermTile.TRIM_DP), 0);
+            dockRow.addView(tile, tl);
         }
         LinearLayout.LayoutParams dlp = matchWrap();
-        dlp.setMargins(-tileOut, dp(8) - tileOut, -tileOut, -tileOut);
+        int bodyIn = tileOut - dp(TermTile.TRIM_DP);   // the first tile's body sits this far inside the row
+        dlp.setMargins(-bodyIn, dp(8) - tileOut, -bodyIn, -tileOut);
         home.addView(dockRow, dlp);
 
         footer = Term.label(activity, 10, Term.MUTED);
@@ -206,10 +248,20 @@ final class TerminalHome {
         grid.setLayoutManager(new GridLayoutManager(activity, 4));
         grid.setAdapter(appsAdapter);
         grid.setItemAnimator(null);
+        // Tiles overlap by TRIM_DP a side (12dp between bodies); the padding keeps the outer column's ring in view.
+        int trim = dp(TermTile.TRIM_DP);
+        grid.addItemDecoration(new RecyclerView.ItemDecoration() {
+            @Override public void getItemOffsets(@NonNull android.graphics.Rect out, @NonNull View v, @NonNull RecyclerView rv,
+                                                 @NonNull RecyclerView.State state) {
+                out.set(-trim, -trim, -trim, -trim);
+            }
+        });
+        grid.setPadding(tileOut, tileOut, tileOut, tileOut);
         grid.setClipToPadding(false);
         grid.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        int gridIn = 2 * tileOut - trim;   // padding plus the tile's own margin, past the overlap
         LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 2f);
-        glp.setMargins(-tileOut, -tileOut, 0, -tileOut);
+        glp.setMargins(-gridIn, -gridIn, 0, -gridIn);
         body.addView(grid, glp);
 
         LinearLayout system = new LinearLayout(activity);
@@ -217,10 +269,9 @@ final class TerminalHome {
         TextView sysHead = Term.label(activity, 10, Term.TEXT);
         sysHead.setText("SYSTEM");
         system.addView(sysHead);
-        systemRows = new LinearLayout(activity);
-        systemRows.setOrientation(LinearLayout.VERTICAL);
+        systemRows = ring();
         LinearLayout.LayoutParams srp = matchWrap();
-        srp.topMargin = dp(10);
+        srp.setMargins(-tileOut, dp(10) - tileOut, -tileOut, 0);
         system.addView(systemRows, srp);
         systemRows.addView(menuRow("INPUTS", "HDMI", this::openInputs));
         systemRows.addView(menuRow("SETTINGS", "ANDROID TV", () -> host.open(SystemSettings.intent(activity, Settings.ACTION_SETTINGS))));
@@ -236,7 +287,7 @@ final class TerminalHome {
         if (!trendingEnabled) refresh.setVisibility(View.GONE);
         systemRows.addView(refresh);
         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        slp.leftMargin = dp(24);
+        slp.leftMargin = dp(24) - (gridIn - tileOut);
         body.addView(system, slp);
         LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
         blp.topMargin = dp(20);
@@ -266,6 +317,13 @@ final class TerminalHome {
         handler.removeCallbacks(tick);
         tick.run();
         updateNetwork();
+        if (bootLines) {
+            bootLines = false;
+            typed = 0;
+            showTyped();
+            handler.postDelayed(typeStep, TYPE_STEP_MS);
+        }
+        startBlink();
     }
 
     void onResume() {
@@ -281,15 +339,32 @@ final class TerminalHome {
 
     void onStop() {
         handler.removeCallbacks(tick);
+        handler.removeCallbacks(blink);
+        finishAnimations();
+    }
+
+    /** A key went down: every running effect jumps to its end state, so the remote never waits on one. */
+    void finishAnimations() {
+        View f = root.findFocus();
+        if (f instanceof TermTile) ((TermTile) f).finishAnimation();
+        for (RingLayout r : rings) r.finishAnimation();
+        card.finishAnimations();
+        if (typed >= 0) {
+            handler.removeCallbacks(typeStep);
+            typed = -1;
+            showTyped();
+        }
     }
 
     /** The remote's Home: back to the dock's first tile, whatever was open. */
     void goHome() {
         closeMenu();
         apps.setVisibility(View.GONE);
+        boolean changed = home.getVisibility() != View.VISIBLE;
         home.setVisibility(View.VISIBLE);
         dock[returnTile].setReturnPoint(false);
         focusDock(0);
+        if (changed) startBlink();
     }
 
     /** Back: menu, then the apps screen, then the card; the dock itself has nowhere to go back to. */
@@ -352,6 +427,7 @@ final class TerminalHome {
         updateNetworkHint();
         home.setVisibility(View.GONE);
         apps.setVisibility(View.VISIBLE);
+        startBlink();
         grid.scrollToPosition(0);
         grid.post(() -> {
             RecyclerView.ViewHolder first = grid.findViewHolderForAdapterPosition(0);
@@ -364,6 +440,7 @@ final class TerminalHome {
         closeMenu();
         apps.setVisibility(View.GONE);
         home.setVisibility(View.VISIBLE);
+        startBlink();
         bindDock();
         focusDock(slot);
     }
@@ -507,6 +584,7 @@ final class TerminalHome {
         h.setGravity(Gravity.CENTER_VERTICAL);
         TextView path = Term.label(activity, 14, Term.TEXT);
         path.setText("~ / " + where);
+        path.setTag("~ / " + where);
         h.addView(path);
         View cursor = new View(activity);
         cursor.setBackgroundColor(Term.TEXT);
@@ -531,18 +609,19 @@ final class TerminalHome {
         LinearLayout.LayoutParams kl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         kl.leftMargin = dp(18);
         h.addView(clock, kl);
-        headers.add(new View[]{square, status, date, clock});
+        headers.add(new View[]{square, status, date, clock, path, cursor});
         return h;
     }
 
     private void updateClock() {
         Calendar now = Calendar.getInstance();
         String date = Term.upper(DateFormat.format("EEE d MMM", now));
-        String time = DateFormat.format(DateFormat.is24HourFormat(activity) ? "HH:mm" : "h:mm", now).toString();
+        clockText = DateFormat.format(DateFormat.is24HourFormat(activity) ? "HH:mm" : "h:mm", now).toString();
         for (View[] h : headers) {
             ((TextView) h[2]).setText(date);
-            ((TextView) h[3]).setText(time);
+            ((TextView) h[3]).setText(clockText);
         }
+        if (typed >= 0) showTyped();
     }
 
     /** Called from MainActivity's network callback as well as on start. */
@@ -575,14 +654,14 @@ final class TerminalHome {
         LinearLayout panel = new LinearLayout(activity);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setBackground(boxed());
-        panel.setPadding(dp(16), dp(14), dp(16), dp(16));
+        int ringRoom = dp(TermTile.OUT_DP);
+        panel.setPadding(dp(16), dp(14), dp(16), dp(16) - ringRoom);
         TextView head = Term.label(activity, 10, Term.MUTED);
         head.setText(tile.label());
         panel.addView(head);
-        LinearLayout rows = new LinearLayout(activity);
-        rows.setOrientation(LinearLayout.VERTICAL);
+        RingLayout rows = ring();
         LinearLayout.LayoutParams rlp = matchWrap();
-        rlp.topMargin = dp(10);
+        rlp.setMargins(-ringRoom, dp(10) - ringRoom, -ringRoom, 0);
         panel.addView(rows, rlp);
         String pkg = tile.key;
         if (!dockPkgs.contains(pkg)) {
@@ -607,6 +686,7 @@ final class TerminalHome {
     private void closeMenu() {
         if (menu == null) return;
         root.removeView(menu);
+        rings.remove(((ViewGroup) menu).getChildAt(1));
         menu = null;
         apps.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
         if (menuTile != null && apps.getVisibility() == View.VISIBLE) menuTile.requestFocus();
@@ -698,6 +778,92 @@ final class TerminalHome {
 
         @Override public int getItemCount() {
             return list.size();
+        }
+    }
+
+    // ---- motion ----------------------------------------------------------------------------------
+
+    private String headerPath(int i) {
+        return ((TextView) headers.get(i)[4]).getTag().toString();
+    }
+
+    /** The boot type-in: the home header's path first, then its clock, a character a step. */
+    private void showTyped() {
+        View[] h = headers.get(0);
+        String path = headerPath(0);
+        int n = typed < 0 ? Integer.MAX_VALUE : typed;
+        ((TextView) h[4]).setText(path.substring(0, Math.min(n, path.length())));
+        int c = Math.max(0, Math.min(n - path.length(), clockText.length()));
+        ((TextView) h[3]).setText(typed < 0 ? clockText : clockText.substring(0, c));
+    }
+
+    private void startBlink() {
+        handler.removeCallbacks(blink);
+        for (View[] h : headers) h[5].setVisibility(View.VISIBLE);
+        if (!Term.motion()) return;
+        blinking = headers.get(apps.getVisibility() == View.VISIBLE ? 1 : 0)[5];
+        blinksLeft = BLINKS;
+        handler.postDelayed(blink, 500);
+    }
+
+    private RingLayout ring() {
+        RingLayout r = new RingLayout(activity);
+        rings.add(r);
+        return r;
+    }
+
+    /**
+     * A column of rows that draws the focus ring around its focused row, in its own padding: the rows sit
+     * close, so a row could not draw a ring 4dp outside itself. The ring comes in like a tile's, 8dp then 4dp.
+     */
+    static final class RingLayout extends LinearLayout {
+        private final Paint ring = new Paint();
+        private final float d;
+        private float gap = 4;
+        private final Runnable snap = () -> {
+            gap = 4;
+            invalidate();
+        };
+
+        RingLayout(Context c) {
+            super(c);
+            d = c.getResources().getDisplayMetrics().density;
+            setOrientation(VERTICAL);
+            setWillNotDraw(false);
+            int p = Math.round(TermTile.OUT_DP * d);
+            setPadding(p, p, p, p);
+            ring.setStyle(Paint.Style.STROKE);
+            ring.setStrokeWidth(2 * d);
+            ring.setColor(Term.TEXT);
+        }
+
+        @Override public void requestChildFocus(View child, View focused) {
+            super.requestChildFocus(child, focused);
+            removeCallbacks(snap);
+            gap = Term.motion() ? 8 : 4;
+            if (gap != 4) postDelayed(snap, Term.STEP_MS);
+            invalidate();
+        }
+
+        @Override public void clearChildFocus(View child) {
+            super.clearChildFocus(child);
+            removeCallbacks(snap);
+            gap = 4;
+            invalidate();
+        }
+
+        void finishAnimation() {
+            if (gap == 4) return;
+            removeCallbacks(snap);
+            snap.run();
+        }
+
+        @Override protected void dispatchDraw(Canvas c) {
+            super.dispatchDraw(c);
+            View f = getFocusedChild();
+            if (f == null || !f.isFocused()) return;
+            float g = (gap + 1) * d;
+            c.drawRect(f.getLeft() - g, f.getTop() - g, f.getRight() + g, f.getBottom() + g, ring);
         }
     }
 

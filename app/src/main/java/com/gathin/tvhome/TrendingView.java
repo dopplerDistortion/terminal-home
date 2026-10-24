@@ -3,6 +3,8 @@ package com.gathin.tvhome;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
+import android.graphics.ColorMatrix;
+import android.graphics.ColorMatrixColorFilter;
 import android.graphics.Paint;
 import android.graphics.RectF;
 import android.os.Handler;
@@ -22,7 +24,9 @@ import java.util.Locale;
  * The trending card of the terminal home: label row, then the title, meta and overview on the left and the TMDB
  * backdrop on the right, with a ten-segment pager. One view drawn by hand, so it costs one layer; it pages on its
  * own every {@link #ROTATE_MS} while it is on screen and not focused, and never touches the network itself
- * (Trending does). Slides change at once: the design has no motion.
+ * (Trending does). Motion is stepped, never eased: the current pager segment fills in sixteen steps over the
+ * interval, and a new slide comes in through a 240 ms monochrome glitch (three frames, the slide shifted
+ * sideways, a bone or gray band across it) before its meta line types in. The red button never moves.
  *
  * The view is {@link #OUT_DP} larger than the card on every side, room for the focus outline and the arrow tabs.
  */
@@ -34,6 +38,12 @@ final class TrendingView extends View {
     static final int OUT_DP = 10;
     private static final long ROTATE_MS = 8000;
     private static final int MAX_SLIDES = 10;
+    private static final int PAGER_STEPS = 16;
+    private static final long GLITCH_FRAME_MS = 80;
+    private static final int GLITCH_FRAMES = 3;
+    private static final int META_STEPS = 8;
+    private static final long META_STEP_MS = 25;
+    private static final float[] GLITCH_DX = {6, -4, 2};
 
     private final float d;
     private final Paint fill = new Paint();
@@ -50,6 +60,7 @@ final class TrendingView extends View {
     private final android.graphics.Rect src = new android.graphics.Rect();
     private final RectF dst = new RectF();
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final ColorMatrixColorFilter mono;
 
     private List<Trending.Item> all = new ArrayList<>();
     private List<Trending.Item> items = new ArrayList<>();
@@ -63,10 +74,44 @@ final class TrendingView extends View {
     private StaticLayout bodyLayout;
     private int layoutFor = -1;
     private int layoutWidth = -1;
+    /** Time the current slide has been shown and paging was running, in whole pager steps. */
+    private long elapsed;
+    /** Glitch frame on screen, or -1 once the slide has settled. */
+    private int glitch = -1;
+    /** Characters of the meta line typed so far. */
+    private int metaShown = Integer.MAX_VALUE;
 
-    private final Runnable next = () -> {
-        if (rotating && items.size() > 1) show((index + 1) % items.size());
-        schedule();
+    private final Runnable tick = new Runnable() {
+        @Override public void run() {
+            if (!running()) return;
+            elapsed += ROTATE_MS / PAGER_STEPS;
+            if (elapsed >= ROTATE_MS) show((index + 1) % items.size());
+            else invalidate();
+            schedule();
+        }
+    };
+    private final Runnable glitchStep = new Runnable() {
+        @Override public void run() {
+            glitch++;
+            if (glitch < GLITCH_FRAMES) {
+                handler.postDelayed(this, GLITCH_FRAME_MS);
+            } else {
+                glitch = -1;
+                metaShown = 0;
+                handler.postDelayed(metaStep, META_STEP_MS);
+            }
+            invalidate();
+        }
+    };
+    private final Runnable metaStep = new Runnable() {
+        @Override public void run() {
+            Trending.Item it = current();
+            int len = it == null ? 0 : meta(it).length();
+            metaShown += Math.max(1, (len + META_STEPS - 1) / META_STEPS);
+            if (metaShown < len) handler.postDelayed(this, META_STEP_MS);
+            else metaShown = Integer.MAX_VALUE;
+            invalidate();
+        }
     };
 
     TrendingView(Context context) {
@@ -87,6 +132,9 @@ final class TrendingView extends View {
         buttonPaint.setLetterSpacing(0.1f);
         arrowPaint = Term.monoPaint(context, 14, Term.BG);
         line.setStyle(Paint.Style.STROKE);
+        ColorMatrix grey = new ColorMatrix();
+        grey.setSaturation(0);
+        mono = new ColorMatrixColorFilter(grey);
     }
 
     void setListener(Listener l) {
@@ -127,6 +175,8 @@ final class TrendingView extends View {
         items = out;
         index = 0;
         layoutFor = -1;
+        elapsed = 0;
+        startGlitch();
         schedule();
         invalidate();
     }
@@ -137,15 +187,45 @@ final class TrendingView extends View {
         schedule();
     }
 
+    private boolean running() {
+        return rotating && items.size() > 1 && !isFocused();
+    }
+
+    /** Paging resumes where it stopped: the progress kept in elapsed is not lost to a focus visit. */
     private void schedule() {
-        handler.removeCallbacks(next);
-        if (rotating && items.size() > 1 && !isFocused()) handler.postDelayed(next, ROTATE_MS);
+        handler.removeCallbacks(tick);
+        if (running()) handler.postDelayed(tick, ROTATE_MS / PAGER_STEPS);
     }
 
     private void show(int to) {
         if (to == index) return;
         index = to;
         layoutFor = -1;
+        elapsed = 0;
+        startGlitch();
+        invalidate();
+    }
+
+    private void startGlitch() {
+        handler.removeCallbacks(glitchStep);
+        handler.removeCallbacks(metaStep);
+        if (!Term.motion() || items.isEmpty()) {
+            glitch = -1;
+            metaShown = Integer.MAX_VALUE;
+            return;
+        }
+        glitch = 0;
+        metaShown = 0;
+        handler.postDelayed(glitchStep, GLITCH_FRAME_MS);
+    }
+
+    /** A new key press: the slide settles at once, so the card never makes the remote wait. */
+    void finishAnimations() {
+        if (glitch < 0 && metaShown == Integer.MAX_VALUE) return;
+        handler.removeCallbacks(glitchStep);
+        handler.removeCallbacks(metaStep);
+        glitch = -1;
+        metaShown = Integer.MAX_VALUE;
         invalidate();
     }
 
@@ -181,7 +261,9 @@ final class TrendingView extends View {
     }
 
     @Override protected void onDetachedFromWindow() {
-        handler.removeCallbacks(next);
+        handler.removeCallbacks(tick);
+        handler.removeCallbacks(glitchStep);
+        handler.removeCallbacks(metaStep);
         super.onDetachedFromWindow();
     }
 
@@ -231,7 +313,18 @@ final class TrendingView extends View {
         float mid = Math.round((l + r) / 2f);
         float top = t + rowH;
         Trending.Item it = items.isEmpty() ? null : items.get(index);
-        if (it != null) drawBackdrop(c, it.image, mid, top, r, b);
+        float dx = glitch >= 0 ? GLITCH_DX[glitch] * d : 0;
+        if (it != null) {
+            c.save();
+            c.clipRect(mid, top, r, b);
+            image.setColorFilter(glitch >= 0 ? mono : null);
+            drawBackdrop(c, it.image, mid + dx, top, r + dx, b);
+            if (glitch == 0) {
+                fill.setColor(Term.TEXT);
+                c.drawRect(mid, top + (b - top) * 0.34f, r, top + (b - top) * 0.42f, fill);
+            }
+            c.restore();
+        }
         fill.setColor(focused ? Term.TEXT : Term.RULE);
         c.drawRect(mid, top, mid + d, b, fill);
 
@@ -239,7 +332,12 @@ final class TrendingView extends View {
             metaPaint.setColor(Term.MUTED);
             c.drawText("// NO TRENDING YET", l + pad, top + 40 * d, metaPaint);
         } else {
-            drawText(c, it, l + pad, top + 18 * d, mid - pad, b - 18 * d, focused);
+            drawText(c, it, l + pad, top + 18 * d, mid - pad, b - 18 * d, focused, dx);
+            if (glitch == 1) {
+                // A gray slice across the text half, as if a scanline dropped out.
+                fill.setColor(Term.HELD);
+                c.drawRect(l + d, top + (b - top) * 0.46f, mid, top + (b - top) * 0.52f, fill);
+            }
         }
 
         // Border: 1dp inside the card, and the 2dp focus outline 4dp clear of it.
@@ -281,7 +379,7 @@ final class TrendingView extends View {
         c.drawBitmap(bm, src, dst, image);
     }
 
-    private void drawText(Canvas c, Trending.Item it, float l, float t, float r, float b, boolean focused) {
+    private void drawText(Canvas c, Trending.Item it, float l, float t, float r, float b, boolean focused, float dx) {
         int textW = (int) (r - l);
         if (layoutFor != index || layoutWidth != textW) {
             layoutTitle(it.title, textW);
@@ -302,21 +400,24 @@ final class TrendingView extends View {
 
         float y = t + chipH + 12 * d;
         c.save();
-        c.translate(l, y);
+        c.translate(l + dx, y);
+        if (glitch >= 0) titlePaint.setColor(glitch == 1 ? Term.MUTED : Term.TEXT);
         titleLayout.draw(c);
+        titlePaint.setColor(Term.TEXT);
         c.restore();
         y += titleLayout.getHeight() + 8 * d;
 
         String meta = meta(it);
         CharSequence m = TextUtils.ellipsize(meta, metaPaint, textW, TextUtils.TruncateAt.END);
+        int shown = Math.min(m.length(), metaShown);
         metaPaint.setColor(Term.MUTED);
-        c.drawText(m, 0, m.length(), l, y - metaPaint.ascent(), metaPaint);
+        if (glitch < 0) c.drawText(m, 0, shown, l, y - metaPaint.ascent(), metaPaint);
         y += metaPaint.descent() - metaPaint.ascent() + 10 * d;
 
         // Pager row along the bottom; the overview only where it fits above it.
         float rowH = 22 * d;
         float rowTop = b - rowH;
-        if (y + bodyLayout.getHeight() <= rowTop - 8 * d) {
+        if (glitch < 0 && y + bodyLayout.getHeight() <= rowTop - 8 * d) {
             c.save();
             c.translate(l, y);
             bodyLayout.draw(c);
@@ -325,10 +426,16 @@ final class TrendingView extends View {
 
         float cy = rowTop + rowH / 2f;
         float x = l, seg = 10 * d, cur = 22 * d, gap = 3 * d, segH = 3 * d;
+        // The current segment fills with the interval, one of sixteen steps at a time; alone, it is simply full.
+        float progress = items.size() > 1 ? (float) (elapsed * PAGER_STEPS / ROTATE_MS) / PAGER_STEPS : 1f;
         for (int i = 0; i < items.size(); i++) {
             float w = i == index ? cur : seg;
-            fill.setColor(i == index ? Term.TEXT : Term.MARK);
+            fill.setColor(i == index ? Term.MUTED : Term.MARK);
             c.drawRect(x, cy - segH / 2, x + w, cy + segH / 2, fill);
+            if (i == index && progress > 0) {
+                fill.setColor(Term.TEXT);
+                c.drawRect(x, cy - segH / 2, x + w * progress, cy + segH / 2, fill);
+            }
             x += w + gap;
         }
         String count = String.format(Locale.ROOT, "%02d / %02d", index + 1, items.size());

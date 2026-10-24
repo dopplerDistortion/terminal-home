@@ -17,7 +17,8 @@ import java.util.Locale;
 
 /**
  * The terminal home's look, from the goksen.ing design system: one dark field with a dot grid, bone text, square
- * corners, no shadows, gradients or motion. Red belongs to one control only, the trending card's open button.
+ * corners, no shadows or gradients. Motion is stepped (whole steps, never eased), short, and never scales.
+ * Red belongs to one control only, the trending card's open button, and never moves.
  */
 final class Term {
     private Term() {}
@@ -37,6 +38,16 @@ final class Term {
     static final String DISPLAY_AXES = "'wght' 300, 'wdth' 112.5";
 
     private static Typeface mono, display;
+
+    /** Motion on in Config (animations, not reduced_motion); set once by MainActivity. */
+    static boolean motionAllowed = true;
+    /** One step of the stepped motion: every effect moves in whole steps of this length or a fraction of it. */
+    static final long STEP_MS = 40;
+
+    /** False with motion off in Config or the system's animator duration scale at 0: show final states only. */
+    static boolean motion() {
+        return motionAllowed && android.animation.ValueAnimator.areAnimatorsEnabled();
+    }
 
     static Typeface mono(Context c) {
         if (mono == null) mono = c.getResources().getFont(R.font.geist_mono);

@@ -11,10 +11,12 @@ import android.view.View;
 
 /**
  * One app tile of the terminal home, for the dock and the apps grid: index top left, a monogram in the middle and
- * the name at the bottom. The view is {@link #OUT_DP} larger than the tile on every side, so the focus outline
- * (2dp, 4dp outside the tile) is drawn inside its own bounds and no parent has to stop clipping.
+ * the name at the bottom. The view is {@link #OUT_DP} larger than the tile on every side, so the focus ring
+ * (2dp, 4dp outside the tile, 8dp on its first step in) is drawn inside its own bounds and no parent has to stop
+ * clipping. Parents pull neighbours together by {@link #TRIM_DP} a side to keep 12dp between tiles.
  *
- * OK opens on release; OK held past the long-press timeout calls onHold instead, and the open never comes.
+ * OK opens on release, after the held fill has shown for at least one motion step; OK held past the long-press
+ * timeout calls onHold instead, and the open never comes.
  */
 final class TermTile extends View {
     interface Listener {
@@ -22,7 +24,8 @@ final class TermTile extends View {
         void onHold(TermTile tile);
     }
 
-    static final int OUT_DP = 6;
+    static final int OUT_DP = 11;
+    static final int TRIM_DP = OUT_DP - 6;
 
     private final float d;
     private final Paint fill = new Paint();
@@ -41,6 +44,18 @@ final class TermTile extends View {
     private boolean longFired;
     private boolean returnPoint;
     private Listener listener;
+    private float ringGap = 4;
+    private long pressedAt;
+
+    /** Focus snap, step two: the ring closes in from 8dp to 4dp. */
+    private final Runnable snap = () -> {
+        ringGap = 4;
+        invalidate();
+    };
+    private final Runnable release = () -> {
+        setHeld(false);
+        if (listener != null) listener.onOpen(this);
+    };
 
     TermTile(Context c) {
         super(c);
@@ -90,6 +105,8 @@ final class TermTile extends View {
         if (event.getRepeatCount() == 0) {
             event.startTracking();
             longFired = false;
+            pressedAt = event.getEventTime();
+            removeCallbacks(release);
             setHeld(true);
         }
         return true;
@@ -106,8 +123,14 @@ final class TermTile extends View {
     @Override public boolean onKeyUp(int keyCode, KeyEvent event) {
         if (!isOk(keyCode)) return super.onKeyUp(keyCode, event);
         boolean open = held && !longFired && !event.isCanceled();
-        setHeld(false);
-        if (open && listener != null) listener.onOpen(this);
+        if (!open) {
+            setHeld(false);
+            return true;
+        }
+        // A quick tap would launch before the held fill ever reached the screen: keep it up for one step first.
+        long wait = Term.motion() ? Term.STEP_MS * 2 - (event.getEventTime() - pressedAt) : 0;
+        if (wait > 0) postDelayed(release, wait);
+        else release.run();
         return true;
     }
 
@@ -125,8 +148,21 @@ final class TermTile extends View {
 
     @Override protected void onFocusChanged(boolean gained, int direction, Rect previous) {
         super.onFocusChanged(gained, direction, previous);
-        if (!gained) held = false;
+        removeCallbacks(snap);
+        if (!gained) {
+            held = false;
+            removeCallbacks(release);
+        }
+        ringGap = gained && Term.motion() ? 8 : 4;
+        if (ringGap != 4) postDelayed(snap, Term.STEP_MS);
         invalidate();
+    }
+
+    /** A new key press: skip to the end state of whatever is running. */
+    void finishAnimation() {
+        if (ringGap == 4) return;
+        removeCallbacks(snap);
+        snap.run();
     }
 
     @Override protected void onDraw(Canvas c) {
@@ -138,10 +174,11 @@ final class TermTile extends View {
         c.drawRect(l, t, r, b, fill);
 
         if (focused && !held) {
-            // 2dp outline, 4dp clear of the tile: the stroke is centred on its path, so the path sits 5dp out.
+            // 2dp ring, ringGap clear of the tile: the stroke is centred on its path, so the path sits 1dp further out.
+            float g = (ringGap + 1) * d;
             line.setStrokeWidth(2 * d);
             line.setColor(Term.TEXT);
-            c.drawRect(l - 5 * d, t - 5 * d, r + 5 * d, b + 5 * d, line);
+            c.drawRect(l - g, t - g, r + g, b + g, line);
         } else if (!focused) {
             line.setStrokeWidth(d);
             line.setColor(returnPoint ? Term.TEXT : Term.RULE);
