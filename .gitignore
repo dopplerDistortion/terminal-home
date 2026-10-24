@@ -2,3 +2,11 @@ keys.properties
 local.properties
 build/
 .gradle/
+*.jks
+*.keystore
+*.apk
+*.aab
+*.idsig
+.DS_Store
+.idea/
+*.iml
