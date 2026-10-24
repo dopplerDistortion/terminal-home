@@ -1737,7 +1737,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
      */
     private void setUpTerminalHome(Bundle savedInstanceState) {
         boolean trendingOn = getResources().getBoolean(R.bool.trending_hero) && !BuildConfig.TMDB_API_KEY.isEmpty();
-        if (trendingOn) trending = new Trending(this, BuildConfig.TMDB_API_KEY, getString(R.string.trending_region));
+        boolean spotifyOn = Spotify.configured(BuildConfig.SPOTIFY_CLIENT_ID, BuildConfig.SPOTIFY_CLIENT_SECRET);
+        if (trendingOn) trending = new Trending(this, BuildConfig.TMDB_API_KEY, getString(R.string.trending_region), spotify());
         Term.motionAllowed = animations && !reducedMotion;
         terminal = new TerminalHome(this, new TerminalHome.Host() {
             @Override public void open(Intent intent) {
@@ -1755,7 +1756,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     if (!isDestroyed()) terminal.setTrending(items, trending.cachedAt());
                 });
             }
-        }, trendingOn);
+        }, trendingOn, spotifyOn);
         setContentView(terminal.root());
         getWindow().setBackgroundDrawable(null);   // the dot grid is opaque
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
@@ -1772,7 +1773,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     private void setUpTrending() {
         if (!getResources().getBoolean(R.bool.trending_hero) || BuildConfig.TMDB_API_KEY.isEmpty()) return;
-        trending = new Trending(this, BuildConfig.TMDB_API_KEY, getString(R.string.trending_region));
+        trending = new Trending(this, BuildConfig.TMDB_API_KEY, getString(R.string.trending_region), spotify());
         trendingView = new TrendingView(this);
         ((FrameLayout) findViewById(R.id.root)).addView(trendingView, new FrameLayout.LayoutParams(0, 0));
         trendingView.setListener(this::openTrending);
@@ -1789,6 +1790,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             return false;
         });
         refreshTrending();
+    }
+
+    /** Spotify's feed for the trending list (for you with a sign-in, else new releases), or null without its keys. */
+    private Spotify spotify() {
+        if (!Spotify.configured(BuildConfig.SPOTIFY_CLIENT_ID, BuildConfig.SPOTIFY_CLIENT_SECRET)) return null;
+        return new Spotify(BuildConfig.SPOTIFY_CLIENT_ID, BuildConfig.SPOTIFY_CLIENT_SECRET, BuildConfig.SPOTIFY_REFRESH_TOKEN,
+                getString(R.string.trending_region), getSharedPreferences("spotify", MODE_PRIVATE));
     }
 
     private void refreshTrending() {
@@ -1847,7 +1855,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     private void openTrending(Trending.Item item) {
         Intent i;
-        if (item.youtubeKey != null) {
+        if (item.uri != null) {
+            i = new Intent(Intent.ACTION_VIEW, Uri.parse(item.uri)).setPackage(item.pkg);
+            // An app that does not take the link: open the app itself.
+            if (i.resolveActivity(getPackageManager()) == null) i = getPackageManager().getLeanbackLaunchIntentForPackage(item.pkg);
+        } else if (item.youtubeKey != null) {
             i = new Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=" + item.youtubeKey)).setPackage(item.pkg);
         } else {
             i = getPackageManager().getLeanbackLaunchIntentForPackage(item.pkg);

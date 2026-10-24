@@ -28,13 +28,15 @@ import java.util.concurrent.Executors;
 /**
  * Trending titles for the top-shelf carousel, from TMDB. The launcher's only network use: one refresh at most
  * every {@link #MAX_AGE_MS}, off the main thread, with the list and the backdrops kept in the cache directory.
- * Each item belongs to one of the three apps the shelf opens; none of them publishes a feed to a third-party
- * launcher, so TMDB stands in for all three.
+ * Each item belongs to one of the apps the shelf opens; none of the three video apps publishes a feed to a
+ * third-party launcher, so TMDB stands in for them. Spotify's feed comes from its own Web API (Spotify), in the
+ * same list and cache, and only when its keys are set.
  */
 final class Trending {
     static final String YOUTUBE = "com.google.android.youtube.tv";
     static final String NUVIO = "com.nuvio.app";
     static final String APPLE_TV = "com.apple.atve.androidtv.appletv";
+    static final String SPOTIFY = "com.spotify.tv.android";
 
     private static final long MAX_AGE_MS = 6L * 60 * 60 * 1000;
     // Ten a source: the home card pages through one app's feed, ten slides deep.
@@ -50,6 +52,10 @@ final class Trending {
         String overview;
         String backdrop;
         String youtubeKey;
+        /** The link that opens the item in its app (a Spotify album page), or null. */
+        String uri;
+        /** Picked for the signed-in user (Spotify's for-you feed), not a public chart. */
+        boolean forYou;
         Bitmap image;
         // The parts of meta, kept apart for the terminal card's chip and meta line. Empty when unknown.
         String kind = "";
@@ -67,17 +73,19 @@ final class Trending {
     private final File imageDir;
     private final String key;
     private final String region;
+    private final Spotify spotify;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private boolean loading;
     private boolean force;
 
-    Trending(Context context, String key, String region) {
+    Trending(Context context, String key, String region, Spotify spotify) {
         this.context = context.getApplicationContext();
         this.key = key;
         this.region = region;
-        // v2: ten a source and the meta split into fields; the old four-a-source list is fetched again once.
-        listFile = new File(this.context.getCacheDir(), "trending-v2.json");
+        this.spotify = spotify;
+        // v4: Spotify's albums, their links and the for-you mark; older lists are fetched again once.
+        listFile = new File(this.context.getCacheDir(), "trending-v4.json");
         imageDir = new File(this.context.getCacheDir(), "trending");
     }
 
@@ -90,7 +98,7 @@ final class Trending {
         return listFile.exists() ? listFile.lastModified() : 0L;
     }
 
-    /** Like load, but fetches from TMDB even when the cached list is still fresh. */
+    /** Like load, but fetches from TMDB and Spotify even when the cached list is still fresh. */
     void refresh(Listener listener) {
         force = true;
         load(listener);
@@ -162,6 +170,15 @@ final class Trending {
             if (i < nuvio.size()) out.add(nuvio.get(i));
             if (i < apple.size()) out.add(apple.get(i));
         }
+        // After the interleaved three, so the mixed feed (the first ten) stays TMDB's. Spotify down or refusing
+        // the keys costs only its own tile.
+        if (spotify != null && spotify.enabled()) {
+            try {
+                List<Item> albums = spotify.fetch();
+                out.addAll(albums.subList(0, Math.min(PER_SOURCE, albums.size())));
+            } catch (Exception ignored) {
+            }
+        }
         return out;
     }
 
@@ -225,7 +242,7 @@ final class Trending {
                     c.disconnect();
                 }
             }
-            // 565: thirty backdrops stay around while Home runs, and a photo shows no difference without alpha.
+            // 565: forty pictures stay around while Home runs, and a photo shows no difference without alpha.
             BitmapFactory.Options opts = new BitmapFactory.Options();
             opts.inPreferredConfig = Bitmap.Config.RGB_565;
             return BitmapFactory.decodeFile(f.getAbsolutePath(), opts);
@@ -257,7 +274,7 @@ final class Trending {
         JSONArray arr = new JSONArray();
         for (Item i : items) {
             arr.put(new JSONObject().put("pkg", i.pkg).put("title", i.title).put("meta", i.meta)
-                    .put("overview", i.overview).put("backdrop", i.backdrop).put("yt", i.youtubeKey == null ? "" : i.youtubeKey)
+                    .put("overview", i.overview).put("backdrop", i.backdrop).put("yt", i.youtubeKey == null ? "" : i.youtubeKey).put("uri", i.uri == null ? "" : i.uri).put("forYou", i.forYou)
                     .put("kind", i.kind).put("year", i.year).put("genre", i.genre).put("rating", i.rating));
         }
         try (FileOutputStream out = new FileOutputStream(listFile)) {
@@ -280,6 +297,8 @@ final class Trending {
             i.overview = o.getString("overview");
             i.backdrop = o.getString("backdrop");
             i.youtubeKey = o.getString("yt").isEmpty() ? null : o.getString("yt");
+            i.uri = o.optString("uri").isEmpty() ? null : o.optString("uri");
+            i.forYou = o.optBoolean("forYou");
             i.kind = o.optString("kind");
             i.year = o.optString("year");
             i.genre = o.optString("genre");

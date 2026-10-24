@@ -59,9 +59,8 @@ final class TerminalHome {
     private static final String KICK = "com.kick.mobile";
     private static final String YT_MUSIC = "com.google.android.youtube.tvmusic";
     private static final String PRIME = "com.amazon.amazonvideo.livingroom";
-    private static final String SPOTIFY = "com.spotify.tv.android";
     private static final List<String> DEFAULT_DOCK = Arrays.asList(Trending.YOUTUBE, Trending.APPLE_TV, Trending.NUVIO,
-            KICK, YT_MUSIC, PRIME, SPOTIFY);
+            KICK, YT_MUSIC, PRIME, Trending.SPOTIFY);
     /** Short names and monograms for the default dock; any other app gets its label and Term.monogram. */
     private static final Map<String, String[]> KNOWN = new HashMap<>();
     static {
@@ -71,11 +70,12 @@ final class TerminalHome {
         KNOWN.put(KICK, new String[]{"Kick", "KK"});
         KNOWN.put(YT_MUSIC, new String[]{"YT Music", "YM"});
         KNOWN.put(PRIME, new String[]{"Prime Video", "PV"});
-        KNOWN.put(SPOTIFY, new String[]{"Spotify", "SP"});
+        KNOWN.put(Trending.SPOTIFY, new String[]{"Spotify", "SP"});
     }
 
     private final Activity activity;
     private final Host host;
+    private final boolean spotifyEnabled;
     private final float d;
     private final PackageManager pm;
     private final SharedPreferences prefs;
@@ -139,9 +139,10 @@ final class TerminalHome {
         }
     };
 
-    TerminalHome(Activity activity, Host host, boolean trendingEnabled) {
+    TerminalHome(Activity activity, Host host, boolean trendingEnabled, boolean spotifyEnabled) {
         this.activity = activity;
         this.host = host;
+        this.spotifyEnabled = trendingEnabled && spotifyEnabled;
         d = activity.getResources().getDisplayMetrics().density;
         pm = activity.getPackageManager();
         prefs = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
@@ -279,7 +280,7 @@ final class TerminalHome {
         networkHint = network.findViewWithTag("hint");
         systemRows.addView(network);
         systemRows.addView(menuRow("SLEEP TIMER", "TIMER", this::openSleepTimer));
-        View refresh = menuRow("REFRESH TRENDING", "TMDB", () -> {
+        View refresh = menuRow("REFRESH TRENDING", spotifyEnabled ? "TMDB · SPOTIFY" : "TMDB", () -> {
             refreshHint.setText("FETCHING…");
             host.refreshTrending();
         });
@@ -408,8 +409,16 @@ final class TerminalHome {
     private void onDockFocused(int slot) {
         for (TermTile t : dock) t.setReturnPoint(false);
         String pkg = dock[slot].key;
-        boolean feed = Trending.YOUTUBE.equals(pkg) || Trending.NUVIO.equals(pkg) || Trending.APPLE_TV.equals(pkg);
-        card.setFeed(feed ? pkg : null, feed ? TrendingView.appName(pkg) : "ALL");
+        boolean feed = isFeed(pkg);
+        String name = Trending.SPOTIFY.equals(pkg) ? "SPOTIFY · NEW RELEASES " + Term.upper(activity.getString(R.string.trending_region))
+                : TrendingView.appName(pkg);
+        card.setFeed(feed ? pkg : null, feed ? name : "ALL");
+    }
+
+    /** The dock apps with a feed of their own on the card; Spotify only with its keys set. */
+    private boolean isFeed(String pkg) {
+        return Trending.YOUTUBE.equals(pkg) || Trending.NUVIO.equals(pkg) || Trending.APPLE_TV.equals(pkg)
+                || spotifyEnabled && Trending.SPOTIFY.equals(pkg);
     }
 
     private void backToDock() {
@@ -488,8 +497,7 @@ final class TerminalHome {
             String[] known = KNOWN.get(pkg);
             CharSequence label = known != null ? known[0] : appLabel(pkg);
             String mono = known != null ? known[1] : Term.monogram(label);
-            boolean feed = Trending.YOUTUBE.equals(pkg) || Trending.NUVIO.equals(pkg) || Trending.APPLE_TV.equals(pkg);
-            dock[i].bind(pkg, i, feed ? "feed" : null, mono, label);
+            dock[i].bind(pkg, i, isFeed(pkg) ? "feed" : null, mono, label);
         }
         dock[DOCK_APPS].bind(ALL_APPS, DOCK_APPS, null, "::", "All apps");
     }

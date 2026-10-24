@@ -41,9 +41,24 @@ You need JDK 17 and the Android SDK command-line tools.
 
    ```properties
    TMDB_API_KEY=your-key-here
+   SPOTIFY_CLIENT_ID=
+   SPOTIFY_CLIENT_SECRET=
+   SPOTIFY_REFRESH_TOKEN=
    ```
 
-   Without a key the launcher works, but it has no trending card.
+   Without a key the launcher works, but it has no trending card. The Spotify keys are optional: the client id
+   and secret come from an app at https://developer.spotify.com/dashboard and give the Spotify tile a feed of new
+   releases. Without them, the Spotify tile shows the mixed feed.
+
+   For a personal Spotify feed (new releases from your top and followed artists, then albums to jump back into),
+   add `http://127.0.0.1:8888/callback` as a redirect URI in the Spotify app, then sign in once:
+
+   ```sh
+   /usr/bin/python3 tools/spotify-login.py
+   ```
+
+   It writes `SPOTIFY_REFRESH_TOKEN` into `keys.properties`. The token is built into your local APK, and it
+   gives read access to your Spotify listening data: do not share that APK.
 3. Build:
 
    ```sh

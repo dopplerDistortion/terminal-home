@@ -22,6 +22,9 @@ android {
         versionCode 8
         versionName '2.7'
         buildConfigField 'String', 'TMDB_API_KEY', '"' + keys.getProperty('TMDB_API_KEY', '').trim() + '"'
+        buildConfigField 'String', 'SPOTIFY_CLIENT_ID', '"' + keys.getProperty('SPOTIFY_CLIENT_ID', '').trim() + '"'
+        buildConfigField 'String', 'SPOTIFY_CLIENT_SECRET', '"' + keys.getProperty('SPOTIFY_CLIENT_SECRET', '').trim() + '"'
+        buildConfigField 'String', 'SPOTIFY_REFRESH_TOKEN', '"' + keys.getProperty('SPOTIFY_REFRESH_TOKEN', '').trim() + '"'
     }
 
     buildTypes {

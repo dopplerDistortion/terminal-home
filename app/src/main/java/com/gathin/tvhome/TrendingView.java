@@ -22,7 +22,7 @@ import java.util.Locale;
 
 /**
  * The trending card of the terminal home: label row, then the title, meta and overview on the left and the TMDB
- * backdrop on the right, with a ten-segment pager. One view drawn by hand, so it costs one layer; it pages on its
+ * backdrop on the right (or Spotify's square artwork against the dot grid), with a ten-segment pager. One view drawn by hand, so it costs one layer; it pages on its
  * own every {@link #ROTATE_MS} while it is on screen and not focused, and never touches the network itself
  * (Trending does). Motion is stepped, never eased: the current pager segment fills in sixteen steps over the
  * interval, and a new slide comes in through a 240 ms monochrome glitch (three frames, the slide shifted
@@ -61,6 +61,8 @@ final class TrendingView extends View {
     private final RectF dst = new RectF();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ColorMatrixColorFilter mono;
+    private final Term.DotGrid dots;
+    private final Paint upNext = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
 
     private List<Trending.Item> all = new ArrayList<>();
     private List<Trending.Item> items = new ArrayList<>();
@@ -135,6 +137,9 @@ final class TrendingView extends View {
         ColorMatrix grey = new ColorMatrix();
         grey.setSaturation(0);
         mono = new ColorMatrixColorFilter(grey);
+        dots = new Term.DotGrid(context);
+        upNext.setColorFilter(mono);
+        upNext.setAlpha(110);
     }
 
     void setListener(Listener l) {
@@ -156,8 +161,8 @@ final class TrendingView extends View {
     }
 
     /**
-     * Which app's trending the card pages through: a package of the feed (YouTube, Nuvio, Apple TV), or null for
-     * the mixed feed, the first ten of all three interleaved.
+     * Which app's trending the card pages through: a package of the feed (YouTube, Nuvio, Apple TV, Spotify), or
+     * null for the mixed feed, the first ten of the three video apps interleaved.
      */
     void setFeed(String pkg, String name) {
         if (TextUtils.equals(pkg, feedPkg) && name.equals(feedName)) return;
@@ -275,14 +280,16 @@ final class TrendingView extends View {
         if (Trending.YOUTUBE.equals(pkg)) return "YOUTUBE";
         if (Trending.NUVIO.equals(pkg)) return "NUVIO";
         if (Trending.APPLE_TV.equals(pkg)) return "APPLE TV";
+        if (Trending.SPOTIFY.equals(pkg)) return "SPOTIFY";
         return "APP";
     }
 
     private String cachedLabel() {
-        if (cachedAt <= 0) return "TMDB";
+        String source = Trending.SPOTIFY.equals(feedPkg) ? "SPOTIFY" : "TMDB";
+        if (cachedAt <= 0) return source;
         long min = Math.max(0, (System.currentTimeMillis() - cachedAt) / 60000);
         String age = min < 1 ? "JUST NOW" : min < 60 ? min + "M AGO" : (min / 60) + "H AGO";
-        return "TMDB · CACHED " + age;
+        return source + " · CACHED " + age;
     }
 
     @Override protected void onDraw(Canvas c) {
@@ -302,7 +309,8 @@ final class TrendingView extends View {
         }
         float baseline = t + rowH / 2f - (labelPaint.ascent() + labelPaint.descent()) / 2f;
         labelPaint.setColor(focused ? Term.BG : Term.TEXT);
-        String head = "TRENDING / " + feedName;
+        Trending.Item first = items.isEmpty() ? null : items.get(0);
+        String head = "TRENDING / " + (first != null && first.forYou ? "SPOTIFY · FOR YOU" : feedName);
         c.drawText(head, l + 14 * d, baseline, labelPaint);
         labelPaint.setColor(focused ? Term.BG : Term.MUTED);
         String age = cachedLabel();
@@ -318,8 +326,10 @@ final class TrendingView extends View {
             c.save();
             c.clipRect(mid, top, r, b);
             image.setColorFilter(glitch >= 0 ? mono : null);
-            drawBackdrop(c, it.image, mid + dx, top, r + dx, b);
-            if (glitch == 0) {
+            boolean shelf = Trending.SPOTIFY.equals(it.pkg);
+            if (shelf) drawShelf(c, mid + d, top, r, b, dx);
+            else drawBackdrop(c, it.image, mid + dx, top, r + dx, b);
+            if (glitch == 0 && !shelf) {
                 fill.setColor(Term.TEXT);
                 c.drawRect(mid, top + (b - top) * 0.34f, r, top + (b - top) * 0.42f, fill);
             }
@@ -379,6 +389,54 @@ final class TrendingView extends View {
         c.drawBitmap(bm, src, dst, image);
     }
 
+    /**
+     * Album covers are square, so a Spotify slide turns the right half into a cover shelf on the dot grid: the
+     * current cover at the full height, left-aligned, and the next two smaller, stacked, gray and dimmed (up next),
+     * over the slide count. Paging moves the shelf one step; the glitch touches the large cover only. Each cover
+     * has a 1dp rule border; nothing is stretched, blurred, faded or rounded.
+     */
+    private void drawShelf(Canvas c, float l, float t, float r, float b, float dx) {
+        dots.setBounds(Math.round(l), Math.round(t), Math.round(r), Math.round(b));
+        dots.draw(c);
+        float side = Math.min(b - t, r - l);
+        drawCover(c, items.get(index).image, l + dx, t, side, image);
+        if (glitch == 0) {
+            fill.setColor(Term.TEXT);
+            c.drawRect(l, t + side * 0.34f, l + side, t + side * 0.42f, fill);
+        }
+
+        float pad = 14 * d, gap = 8 * d;
+        float countH = metaPaint.descent() - metaPaint.ascent();
+        float small = (b - t - 2 * pad - 2 * gap - countH) / 2f;
+        float x = l + side + pad;
+        if (items.size() < 2 || small < 24 * d || x + small > r - pad) return;
+        float y = t + pad;
+        for (int n = 1; n <= Math.min(2, items.size() - 1); n++) {
+            drawCover(c, items.get((index + n) % items.size()).image, x, y, small, upNext);
+            y += small + gap;
+        }
+        String count = String.format(Locale.ROOT, "%02d / %02d", index + 1, items.size());
+        metaPaint.setColor(Term.MUTED);
+        c.drawText(count, x, t + pad + 2 * (small + gap) - metaPaint.ascent(), metaPaint);
+    }
+
+    /** One square cover with its border; a missing picture leaves the square empty but outlined. */
+    private void drawCover(Canvas c, Bitmap bm, float l, float t, float side, Paint paint) {
+        if (bm != null) {
+            // Spotify's are square; a stray non-square one loses its edges rather than being squashed.
+            int bs = Math.min(bm.getWidth(), bm.getHeight());
+            src.set((bm.getWidth() - bs) / 2, (bm.getHeight() - bs) / 2, (bm.getWidth() + bs) / 2, (bm.getHeight() + bs) / 2);
+            dst.set(l, t, l + side, t + side);
+            c.drawBitmap(bm, src, dst, paint);
+        } else {
+            fill.setColor(Term.CARD);
+            c.drawRect(l, t, l + side, t + side, fill);
+        }
+        line.setStrokeWidth(d);
+        line.setColor(Term.RULE);
+        c.drawRect(l + d / 2, t + d / 2, l + side - d / 2, t + side - d / 2, line);
+    }
+
     private void drawText(Canvas c, Trending.Item it, float l, float t, float r, float b, boolean focused, float dx) {
         int textW = (int) (r - l);
         if (layoutFor != index || layoutWidth != textW) {
@@ -391,7 +449,8 @@ final class TrendingView extends View {
         }
 
         // Source chip, outlined.
-        String chip = appName(it.pkg) + (it.kind.isEmpty() ? "" : " · " + Term.upper(it.kind));
+        // A for-you pick says why it is there ("NEW FROM …", "JUMP BACK IN"); the card's label already says Spotify.
+        String chip = it.forYou ? Term.upper(it.kind) : appName(it.pkg) + (it.kind.isEmpty() ? "" : " · " + Term.upper(it.kind));
         float chipH = 20 * d, chipW = chipPaint.measureText(chip) + 16 * d;
         line.setStrokeWidth(d);
         line.setColor(Term.MARK);
@@ -463,6 +522,7 @@ final class TrendingView extends View {
     }
 
     private static String meta(Trending.Item it) {
+        if (Trending.SPOTIFY.equals(it.pkg)) return Term.upper(it.meta);
         StringBuilder m = new StringBuilder();
         if (!it.year.isEmpty()) m.append(it.year);
         if (!it.genre.isEmpty()) m.append(m.length() > 0 ? " · " : "").append(Term.upper(it.genre));
