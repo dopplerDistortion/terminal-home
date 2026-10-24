@@ -5,9 +5,11 @@ A terminal-style home screen for Android TV and Google TV. I built it for a Grun
 
 - **Header**: `~ / home` with a block cursor, network status, date and clock.
 - **Trending card**: trending titles from TMDB for the focused dock app. YouTube shows trailers,
-  Nuvio shows TMDB trending, Apple TV shows Apple TV+ series, and the other apps show a mixed feed.
+  Nuvio shows TMDB trending, Apple TV shows Apple TV+ series, Spotify shows new albums picked for you (see
+  Build), and the other apps show a mixed feed.
   It changes slide every 8 seconds. OK opens the title.
-- **Dock**: eight tiles for YouTube, Apple TV, Nuvio, Kick, YT Music, Prime Video, Spotify and All apps.
+- **Dock**: eight tiles for YouTube, Apple TV, Nuvio, Spotify, YT Music, Prime Video, Kick and All apps.
+  The four apps with a feed come first; a pinned app goes in at slot 05.
   Hold OK on a tile to open its App info.
 - **All apps** (`ls /apps`): every installed app in a grid, and a SYSTEM list with Inputs, Settings,
   Network, Sleep timer and Refresh trending. Hold OK on an app to pin it to the dock.

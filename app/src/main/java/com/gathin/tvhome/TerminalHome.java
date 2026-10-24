@@ -32,7 +32,6 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import java.text.Collator;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Calendar;
 import java.util.HashMap;
 import java.util.List;
@@ -54,13 +53,11 @@ final class TerminalHome {
     }
 
     static final String ALL_APPS = "::";
-    private static final int DOCK_APPS = 7;
+    private static final int DOCK_APPS = TermDock.APPS;
     private static final String PREFS = "terminal_home";
-    private static final String KICK = "com.kick.mobile";
-    private static final String YT_MUSIC = "com.google.android.youtube.tvmusic";
-    private static final String PRIME = "com.amazon.amazonvideo.livingroom";
-    private static final List<String> DEFAULT_DOCK = Arrays.asList(Trending.YOUTUBE, Trending.APPLE_TV, Trending.NUVIO,
-            KICK, YT_MUSIC, PRIME, Trending.SPOTIFY);
+    private static final String KICK = TermDock.KICK;
+    private static final String YT_MUSIC = TermDock.YT_MUSIC;
+    private static final String PRIME = TermDock.PRIME;
     /** Short names and monograms for the default dock; any other app gets its label and Term.monogram. */
     private static final Map<String, String[]> KNOWN = new HashMap<>();
     static {
@@ -475,19 +472,17 @@ final class TerminalHome {
 
     private List<String> loadDock() {
         String saved = prefs.getString("dock", "");
-        List<String> out = new ArrayList<>();
-        for (String p : saved.split(",")) if (LibraryApps.validPackage(p) && !out.contains(p)) out.add(p);
-        for (String p : DEFAULT_DOCK) if (out.size() < DOCK_APPS && !out.contains(p)) out.add(p);
-        return new ArrayList<>(out.subList(0, DOCK_APPS));
+        List<String> out = TermDock.load(saved, prefs.getInt("dock_version", 1));
+        if (!saved.isEmpty() && prefs.getInt("dock_version", 1) < TermDock.VERSION) {
+            prefs.edit().putString("dock", String.join(",", out)).putInt("dock_version", TermDock.VERSION).apply();
+        }
+        return out;
     }
 
-    /** Pinned apps go in after the three feed apps; the dock's last app makes room. */
     private void pin(String pkg) {
         if (dockPkgs.contains(pkg)) return;
-        int at = Math.min(3, dockPkgs.size());
-        dockPkgs.add(at, pkg);
-        dockPkgs = new ArrayList<>(dockPkgs.subList(0, DOCK_APPS));
-        prefs.edit().putString("dock", String.join(",", dockPkgs)).apply();
+        dockPkgs = TermDock.pin(dockPkgs, pkg);
+        prefs.edit().putString("dock", String.join(",", dockPkgs)).putInt("dock_version", TermDock.VERSION).apply();
         bindDock();
     }
 
@@ -673,7 +668,7 @@ final class TerminalHome {
         panel.addView(rows, rlp);
         String pkg = tile.key;
         if (!dockPkgs.contains(pkg)) {
-            rows.addView(menuRow("PIN TO DOCK", "SLOT 04", () -> {
+            rows.addView(menuRow("PIN TO DOCK", "SLOT 05", () -> {
                 pin(pkg);
                 closeMenu();
             }));
