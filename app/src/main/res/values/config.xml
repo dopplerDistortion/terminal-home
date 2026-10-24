@@ -28,6 +28,8 @@
 
     <!-- Fork: the trending carousel above the dock (needs TMDB_API_KEY in keys.properties). -->
     <bool name="trending_hero">true</bool>
+    <!-- Fork: the terminal home screen (TerminalHome) in place of the classic dock and shelf. -->
+    <bool name="terminal_home">true</bool>
     <!-- TMDB watch region for the Apple TV+ slides. -->
     <string name="trending_region" translatable="false">CH</string>
 

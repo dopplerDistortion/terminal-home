@@ -142,6 +142,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     /** Fork: trending carousel above the dock (Trending, TrendingView); null without a TMDB key. */
     private TrendingView trendingView;
     private Trending trending;
+    /** terminal_home: the terminal home screen replaces the classic views; null on the classic home. */
+    private TerminalHome terminal;
     private long trendingLoadedAt;
     private TextView heroMeta;
     private LinearLayout heroDots;
@@ -376,7 +378,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_main);
         density = getResources().getDisplayMetrics().density;
         // config.xml, overlaid by config.json from a pushed theme (see Config and tools/theme.sh).
         Config cfg = Config.load(this);
@@ -411,7 +412,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         sourcePanelAction = cfg.sourcePanelAction;
         sourcePanelExtra = cfg.sourcePanelExtra;
         coocaaSources = cfg.coocaaSources;
+        if (getResources().getBoolean(R.bool.terminal_home)) {
+            setUpTerminalHome(savedInstanceState);
+            return;
+        }
 
+        setContentView(R.layout.activity_main);
         root = findViewById(R.id.root);
         root.setBackgroundColor(cfg.backgroundColor);
         // root fills the window with an opaque colour (Config keeps background_color opaque), so the window's own
@@ -883,6 +889,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         if (openLauncherSettingsIfAsked(intent)) return;
+        if (terminal != null) {
+            if (ACTION_VIEW_INPUTS.equals(intent.getAction())) terminal.openInputs();
+            else if (intent.hasCategory(Intent.CATEGORY_HOME)) terminal.goHome();
+            return;
+        }
         if (openInputsIfAsked(intent)) return;
         if (intent == null || !intent.hasCategory(Intent.CATEGORY_HOME)) return;
         grid.scrollToPosition(0);
@@ -902,6 +913,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         super.onStart();
         stopped = false;
         started = true;
+        if (terminal != null) {
+            terminal.onStart();
+            return;
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(timeReceiver, timeFilter, Context.RECEIVER_NOT_EXPORTED);
         } else {
@@ -914,6 +929,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onResume() {
         super.onResume();
+        if (terminal != null) {
+            if (Config.settingsChanged(settingsRevision, settingsRevision())) {
+                recreate();
+                return;
+            }
+            refreshTrending();
+            terminal.onResume();
+            return;
+        }
         // A festival that started or ended while Home was in the background: rebuild with or without it.
         if (festive != festival.active(LocalDate.now())) {
             recreate();
@@ -1115,7 +1139,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     public void onUserInteraction() {
         super.onUserInteraction();
-        restartIdleClock();
+        if (terminal == null) restartIdleClock();
     }
 
     private void restartIdleClock() {
@@ -1126,6 +1150,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onPause() {
         super.onPause();
+        if (terminal != null) {
+            terminal.onPause();
+            return;
+        }
         root.removeCallbacks(showIdleClock);
         endReorder();   // Home or another app while reordering keeps the order so far
         wallpaperPlayer.stop();
@@ -1147,6 +1175,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     protected void onStop() {
         super.onStop();
         started = false;
+        if (terminal != null) {
+            stopped = true;
+            terminal.onStop();
+            return;
+        }
         unregisterReceiver(timeReceiver);
         handler.removeCallbacks(clockCheck);
         stopped = true;
@@ -1163,7 +1196,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         super.onTrimMemory(level);
         // RUNNING_LOW and CRITICAL also arrive while Home is visible when an accessibility service keeps the
         // process in the foreground; never blank the screen the owner is looking at.
-        if (!MemoryTrimPolicy.shouldRelease(level, started)) return;
+        if (!MemoryTrimPolicy.shouldRelease(level, started) || terminal != null) return;
         adapter.clear();
         // Detach the adapter too: with Home stopped no layout pass runs, so the tile views (and the bitmaps
         // they hold) would stay attached until Home comes back. setAdapter(null) recycles them now.
@@ -1178,7 +1211,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
-        if (hasFocus) {
+        if (hasFocus && terminal == null) {
             startPendingSettingsReorder();
             if (libraryFocusPending && appLibrary == null) focusLibrary();
             showCardPrompt();
@@ -1188,6 +1221,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (terminal != null) {
+            ConnectivityManager cm = getSystemService(ConnectivityManager.class);
+            if (cm != null) cm.unregisterNetworkCallback(networkCallback);
+            return;
+        }
         unregisterReceiver(packageReceiver);
         wallpaperPlayer.close();
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
@@ -1232,6 +1270,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (handleSettingsKey(event)) return true;
+        if (terminal != null) return super.dispatchKeyEvent(event);
         if (tileMenuEnabled && !reordering && openPopup == null && cardPrompt == null
                 && event.getKeyCode() == KeyEvent.KEYCODE_MENU) {
             int position = focusedTilePosition();
@@ -1558,7 +1597,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     @Override
     public void onBackPressed() {
-        // Home screen: Back goes nowhere.
+        // Home screen: Back goes nowhere, except out of the terminal home's apps screen and card.
+        if (terminal != null) terminal.onBack();
     }
 
     // ---- glass highlight -------------------------------------------------------------------------
@@ -1685,12 +1725,51 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
     }
 
+    // ---- terminal home (fork) ----------------------------------------------------------------------
+
+    /**
+     * terminal_home: TerminalHome builds the screen and owns its focus; this activity keeps the remote keys
+     * (dispatchKeyEvent, HomeKeyService), the launches through open() and openTrending(), and the trending feed.
+     * The classic home's views, receivers and timers are never set up, and the lifecycle methods skip them.
+     */
+    private void setUpTerminalHome(Bundle savedInstanceState) {
+        boolean trendingOn = getResources().getBoolean(R.bool.trending_hero) && !BuildConfig.TMDB_API_KEY.isEmpty();
+        if (trendingOn) trending = new Trending(this, BuildConfig.TMDB_API_KEY, getString(R.string.trending_region));
+        terminal = new TerminalHome(this, new TerminalHome.Host() {
+            @Override public void open(Intent intent) {
+                MainActivity.this.open(intent);
+            }
+
+            @Override public void openTrending(Trending.Item item) {
+                MainActivity.this.openTrending(item);
+            }
+
+            @Override public void refreshTrending() {
+                if (trending == null) return;
+                trendingLoadedAt = System.currentTimeMillis();
+                trending.refresh(items -> {
+                    if (!isDestroyed()) terminal.setTrending(items, trending.cachedAt());
+                });
+            }
+        }, trendingOn);
+        setContentView(terminal.root());
+        getWindow().setBackgroundDrawable(null);   // the dot grid is opaque
+        ConnectivityManager cm = getSystemService(ConnectivityManager.class);
+        if (cm != null) cm.registerDefaultNetworkCallback(networkCallback);
+        refreshTrending();
+        if (savedInstanceState == null && !openLauncherSettingsIfAsked(getIntent())
+                && ACTION_VIEW_INPUTS.equals(getIntent().getAction())) {
+            setIntent(new Intent(Intent.ACTION_MAIN));
+            terminal.openInputs();
+        }
+    }
+
     // ---- trending carousel (fork) ------------------------------------------------------------------
 
     private void setUpTrending() {
         if (!getResources().getBoolean(R.bool.trending_hero) || BuildConfig.TMDB_API_KEY.isEmpty()) return;
         trending = new Trending(this, BuildConfig.TMDB_API_KEY, getString(R.string.trending_region));
-        trendingView = new TrendingView(this, animations && !reducedMotion);
+        trendingView = new TrendingView(this);
         ((FrameLayout) findViewById(R.id.root)).addView(trendingView, new FrameLayout.LayoutParams(0, 0));
         trendingView.setListener(this::openTrending);
         trendingView.setOnKeyListener((v, keyCode, event) -> {
@@ -1713,7 +1792,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         trendingLoadedAt = System.currentTimeMillis();
         trending.load(items -> {
             if (isDestroyed() || items.isEmpty()) return;
-            trendingView.setItems(items);
+            if (terminal != null) {
+                terminal.setTrending(items, trending.cachedAt());
+                return;
+            }
+            trendingView.setItems(items, trending.cachedAt());
             if (heroShown) placeTrending(hero.getY());
         });
     }
@@ -2615,6 +2698,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     /** Shows the Wi-Fi network name on the button when we can read it, otherwise the connection type. */
     private void updateWifiLabel() {
+        if (terminal != null) {
+            terminal.updateNetwork();
+            return;
+        }
         String text = getString(R.string.wifi);
         boolean vpn = false, online = false, validated = false;
         int icon = R.drawable.ic_wifi;
