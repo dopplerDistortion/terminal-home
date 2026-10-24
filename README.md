@@ -15,6 +15,23 @@ A terminal-style home screen for Android TV and Google TV. I built it for a Grun
 The look is brutalist: Geist Mono and Martian Mono, square corners, no shadows or gradients, and
 short stepped animations only.
 
+## Screenshots
+
+![Home: trending card for the focused dock app, and the dock](docs/screenshots/home.png)
+Home: the trending card shows the YouTube feed while the YouTube tile has focus.
+
+![Trending card with focus](docs/screenshots/trending-focus.png)
+The trending card with focus: Left and Right change the slide, and OK opens it in Nuvio.
+
+![ls /apps](docs/screenshots/all-apps.png)
+All apps: every installed app, and the SYSTEM list on the right.
+
+![Slide change glitch](docs/screenshots/glitch.png)
+A slide change: a short grey glitch frame before the new slide shows.
+
+![Focus moves and slide changes](docs/screenshots/motion.gif)
+Focus moves along the dock, the trending card takes focus, and the slides change.
+
 ## Build
 
 You need JDK 17 and the Android SDK command-line tools.
