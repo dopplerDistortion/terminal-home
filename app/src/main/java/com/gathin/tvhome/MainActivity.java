@@ -99,6 +99,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private static final int LAUNCHER_SETTINGS_REQUEST = 42;
     /** Sent by QuickSettingsActivity: open Launcher settings from here so Home rebuilds when they close. */
     static final String ACTION_LAUNCHER_SETTINGS = "com.gathin.tvhome.action.LAUNCHER_SETTINGS";
+    /** The "apps" remote key target (RemoteKeys): the terminal home's ls /apps screen. */
+    static final String ACTION_SHOW_APPS = "com.gathin.tvhome.action.SHOW_APPS";
     /** The system input switcher, forwarded here by InputsRequestActivity while handle_view_inputs is on. */
     static final String ACTION_VIEW_INPUTS = "com.android.tv.action.VIEW_INPUTS";
     /** Tiles per row and dock slots (res/values/config.xml, columns). Set in onCreate. */
@@ -891,6 +893,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (openLauncherSettingsIfAsked(intent)) return;
         if (terminal != null) {
             if (ACTION_VIEW_INPUTS.equals(intent.getAction())) terminal.openInputs();
+            else if (ACTION_SHOW_APPS.equals(intent.getAction())) terminal.showApps();
             else if (intent.hasCategory(Intent.CATEGORY_HOME)) terminal.goHome();
             return;
         }
@@ -1272,6 +1275,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (handleSettingsKey(event)) return true;
         if (terminal != null) {
             if (event.getAction() == KeyEvent.ACTION_DOWN) terminal.finishAnimations();
+            if (terminal.dispatchKey(event)) return true;
             return super.dispatchKeyEvent(event);
         }
         if (tileMenuEnabled && !reordering && openPopup == null && cardPrompt == null
@@ -1766,6 +1770,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 && ACTION_VIEW_INPUTS.equals(getIntent().getAction())) {
             setIntent(new Intent(Intent.ACTION_MAIN));
             terminal.openInputs();
+        } else if (savedInstanceState == null && ACTION_SHOW_APPS.equals(getIntent().getAction())) {
+            setIntent(new Intent(Intent.ACTION_MAIN));
+            terminal.showApps();
         }
     }
 

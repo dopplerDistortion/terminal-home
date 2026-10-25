@@ -13,6 +13,13 @@ A terminal-style home screen for Android TV and Google TV. I built it for a Grun
   Hold OK on a tile to open its App info.
 - **All apps** (`ls /apps`): every installed app in a grid, and a SYSTEM list with Inputs, Settings,
   Network, Sleep timer and Refresh trending. Hold OK on an app to pin it to the dock.
+- **Remote keys** (`keymap`, the first SYSTEM row): a line drawing of the Grundig remote. Pick a button with the
+  D-pad, or press it on the real remote, and give it a tap or hold action: an app, Inputs, Home, Apps, Settings,
+  Mute, Sleep or Nothing. LEARN KEY records the button's real keycode. Buttons whose firmware app is disabled
+  (Mic, Guide, ECO) show a dashed outline; FIX BROKEN KEYS maps them in one step. The six app keys are blank:
+  each shows the name of the app you give it. The mappings need the key helper (InputKeyService) on:
+  the KEY HELPER row turns it on when the launcher has WRITE_SECURE_SETTINGS
+  (`adb shell pm grant com.gathin.tvhome android.permission.WRITE_SECURE_SETTINGS`).
 
 The look is brutalist: Geist Mono and Martian Mono, square corners, no shadows or gradients, and
 short stepped animations only.

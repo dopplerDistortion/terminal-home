@@ -27,7 +27,8 @@ import java.util.function.ToIntFunction;
  * the same for a scancode. One set of maps for both services; whichever filters the key first consumes it.
  * A target of "input:<input id>" switches to that TV input (an HDMI port) instead of opening an app, a target
  * of "inputs" opens the input switcher, for a remote whose source button sends a key Android does not map, and
- * one of the action words (back, home, recents, mute, sleep, screensaver, settings, wifi) does that action.
+ * one of the action words (back, home, recents, mute, sleep, screensaver, settings, wifi, apps, none) does that
+ * action: "apps" opens this launcher's apps screen, "none" swallows the button.
  */
 final class RemoteKeys {
 
@@ -179,7 +180,7 @@ final class RemoteKeys {
     static boolean isAction(String target) {
         switch (target) {
             case "back": case "home": case "recents": case "mute": case "sleep":
-            case "screensaver": case "settings": case "wifi":
+            case "screensaver": case "settings": case "wifi": case "apps": case "none":
                 return true;
             default:
                 return false;
@@ -215,8 +216,11 @@ final class RemoteKeys {
             case "wifi":
                 start(ctx, SystemSettings.intent(ctx, Settings.ACTION_WIFI_SETTINGS));
                 break;
+            case "apps":
+                start(ctx, new Intent(ctx, MainActivity.class).setAction(MainActivity.ACTION_SHOW_APPS));
+                break;
             default:
-                break;   // "sleep" below Android 9: consumed, nothing to do
+                break;   // "none", and "sleep" below Android 9: consumed, nothing to do
         }
         return true;
     }

@@ -81,6 +81,9 @@ final class TerminalHome {
     private final FrameLayout root;
     private final LinearLayout home;
     private final LinearLayout apps;
+    private final LinearLayout keys;
+    private final KeymapScreen keymap;
+    private View keysRow;
     private final TrendingView card;
     private final TermTile[] dock = new TermTile[DOCK_APPS + 1];
     private final TextView footer;
@@ -271,6 +274,8 @@ final class TerminalHome {
         LinearLayout.LayoutParams srp = matchWrap();
         srp.setMargins(-tileOut, dp(10) - tileOut, -tileOut, 0);
         system.addView(systemRows, srp);
+        keysRow = menuRow("REMOTE KEYS", "KEYMAP", this::showKeys);
+        systemRows.addView(keysRow);
         systemRows.addView(menuRow("INPUTS", "HDMI", this::openInputs));
         systemRows.addView(menuRow("SETTINGS", "ANDROID TV", () -> host.open(SystemSettings.intent(activity, Settings.ACTION_SETTINGS))));
         View network = menuRow("NETWORK", "", () -> host.open(SystemSettings.intent(activity, Settings.ACTION_WIFI_SETTINGS)));
@@ -298,6 +303,13 @@ final class TerminalHome {
         apps.addView(appsFooter, aflp);
         apps.setVisibility(View.GONE);
         root.addView(apps, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // ---- keys
+        keys = screen();
+        keys.addView(header("keys"));
+        keymap = new KeymapScreen(activity, this, keys);
+        keys.setVisibility(View.GONE);
+        root.addView(keys, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         root.getViewTreeObserver().addOnGlobalFocusChangeListener((oldF, newF) -> updateFooter(newF));
         bindDock();
@@ -327,12 +339,14 @@ final class TerminalHome {
     void onResume() {
         bindDock();   // an app installed or removed meanwhile changes the labels
         card.setRotating(true);
-        if (root.findFocus() == null) focusDock(0);
+        if (keys.getVisibility() == View.VISIBLE) keymap.onShown();
+        else if (root.findFocus() == null) focusDock(0);
     }
 
     void onPause() {
         card.setRotating(false);
         closeMenu();
+        if (keys.getVisibility() == View.VISIBLE) keymap.onHidden();
     }
 
     void onStop() {
@@ -347,6 +361,7 @@ final class TerminalHome {
         if (f instanceof TermTile) ((TermTile) f).finishAnimation();
         for (RingLayout r : rings) r.finishAnimation();
         card.finishAnimations();
+        keymap.finishAnimations();
         if (typed >= 0) {
             handler.removeCallbacks(typeStep);
             typed = -1;
@@ -357,6 +372,7 @@ final class TerminalHome {
     /** The remote's Home: back to the dock's first tile, whatever was open. */
     void goHome() {
         closeMenu();
+        hideKeys();
         apps.setVisibility(View.GONE);
         boolean changed = home.getVisibility() != View.VISIBLE;
         home.setVisibility(View.VISIBLE);
@@ -368,7 +384,9 @@ final class TerminalHome {
     /** Back: menu, then the apps screen, then the card; the dock itself has nowhere to go back to. */
     void onBack() {
         if (menu != null) closeMenu();
-        else if (apps.getVisibility() == View.VISIBLE) showHome(DOCK_APPS);
+        else if (keys.getVisibility() == View.VISIBLE) {
+            if (!keymap.onBack()) backToApps();
+        } else if (apps.getVisibility() == View.VISIBLE) showHome(DOCK_APPS);
         else if (card.hasFocus()) backToDock();
     }
 
@@ -426,8 +444,36 @@ final class TerminalHome {
         dock[slot].requestFocus();
     }
 
-    private void showApps() {
+    /** A key the window got while the keymap screen is up: it finds the button (KeymapScreen.onWindowKey). */
+    boolean dispatchKey(KeyEvent event) {
+        return keys.getVisibility() == View.VISIBLE && keymap.onWindowKey(event);
+    }
+
+    private void showKeys() {
         closeMenu();
+        apps.setVisibility(View.GONE);
+        keys.setVisibility(View.VISIBLE);
+        startBlink();
+        keymap.onShown();
+    }
+
+    private void hideKeys() {
+        if (keys.getVisibility() != View.VISIBLE) return;
+        keymap.onHidden();
+        keys.setVisibility(View.GONE);
+    }
+
+    /** Back from the keymap: ls /apps, with focus on its REMOTE KEYS row. */
+    private void backToApps() {
+        hideKeys();
+        apps.setVisibility(View.VISIBLE);
+        startBlink();
+        keysRow.requestFocus();
+    }
+
+    void showApps() {
+        closeMenu();
+        hideKeys();
         appsAdapter.setApps(installedApps());
         appsCount.setText(String.format(Locale.ROOT, "%d ENTRIES", appsAdapter.list.size()));
         updateNetworkHint();
@@ -444,6 +490,7 @@ final class TerminalHome {
 
     private void showHome(int slot) {
         closeMenu();
+        hideKeys();
         apps.setVisibility(View.GONE);
         home.setVisibility(View.VISIBLE);
         startBlink();
@@ -696,7 +743,25 @@ final class TerminalHome {
         menuTile = null;
     }
 
-    private android.graphics.drawable.Drawable boxed() {
+    /** The keymap's picker, over the whole screen like the hold menu. */
+    void overlay(View panel, FrameLayout.LayoutParams lp) {
+        root.addView(panel, lp);
+    }
+
+    void removeOverlay(View panel) {
+        root.removeView(panel);
+        if (panel instanceof ViewGroup) {
+            // The picker's rows sit in a ScrollView inside the panel.
+            View scroll = ((ViewGroup) panel).getChildAt(1);
+            if (scroll instanceof ViewGroup) rings.remove(((ViewGroup) scroll).getChildAt(0));
+        }
+    }
+
+    void open(Intent intent) {
+        host.open(intent);
+    }
+
+    android.graphics.drawable.Drawable boxed() {
         android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
         g.setColor(Term.CARD);
         g.setStroke(Math.max(1, Math.round(d)), Term.TEXT);
@@ -704,7 +769,7 @@ final class TerminalHome {
     }
 
     /** A row of the SYSTEM list or the hold menu: name left, a muted hint right; bone fill while focused. */
-    private View menuRow(String name, String hint, Runnable action) {
+    View menuRow(String name, String hint, Runnable action) {
         LinearLayout r = row();
         r.setGravity(Gravity.CENTER_VERTICAL);
         r.setPadding(dp(12), 0, dp(12), 0);
@@ -804,12 +869,12 @@ final class TerminalHome {
         handler.removeCallbacks(blink);
         for (View[] h : headers) h[5].setVisibility(View.VISIBLE);
         if (!Term.motion()) return;
-        blinking = headers.get(apps.getVisibility() == View.VISIBLE ? 1 : 0)[5];
+        blinking = headers.get(keys.getVisibility() == View.VISIBLE ? 2 : apps.getVisibility() == View.VISIBLE ? 1 : 0)[5];
         blinksLeft = BLINKS;
         handler.postDelayed(blink, 500);
     }
 
-    private RingLayout ring() {
+    RingLayout ring() {
         RingLayout r = new RingLayout(activity);
         rings.add(r);
         return r;
@@ -881,7 +946,7 @@ final class TerminalHome {
         return s;
     }
 
-    private LinearLayout row() {
+    LinearLayout row() {
         LinearLayout r = new LinearLayout(activity);
         r.setOrientation(LinearLayout.HORIZONTAL);
         r.setClipChildren(false);
@@ -889,15 +954,15 @@ final class TerminalHome {
         return r;
     }
 
-    private static LinearLayout.LayoutParams weight() {
+    static LinearLayout.LayoutParams weight() {
         return new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
     }
 
-    private static LinearLayout.LayoutParams matchWrap() {
+    static LinearLayout.LayoutParams matchWrap() {
         return new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
     }
 
-    private int dp(float v) {
+    int dp(float v) {
         return Math.round(v * d);
     }
 }
