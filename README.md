@@ -20,6 +20,12 @@ A terminal-style home screen for Android TV and Google TV. I built it for a Grun
   each shows the name of the app you give it. The mappings need the key helper (InputKeyService) on:
   the KEY HELPER row turns it on when the launcher has WRITE_SECURE_SETTINGS
   (`adb shell pm grant com.gathin.tvhome android.permission.WRITE_SECURE_SETTINGS`).
+- **Trending screensaver** (`TrendingDream`): the trending feed full screen. Each picture pans slowly for
+  45 seconds while its title, meta line and overview type in, then the next one comes in as 40 dp blocks. OK opens
+  a YouTube trailer directly and the app itself for Apple TV and Nuvio titles (TMDB gives no link into them), Left and Right change the slide, and any other key wakes the TV. From 23:00 to 06:00 the
+  picture is dimmer and the panel folded. It uses the feed Home cached, so it keeps running offline. Pick
+  "Trending" under Screensaver in the TV's settings, or:
+  `adb shell settings put secure screensaver_components com.gathin.tvhome/.TrendingDream`
 
 The look is brutalist: Geist Mono and Martian Mono, square corners, no shadows or gradients, and
 short stepped animations only.
