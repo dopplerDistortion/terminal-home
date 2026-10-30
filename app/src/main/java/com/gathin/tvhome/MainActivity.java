@@ -316,6 +316,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             if (validated == lastValidated) return;
             lastValidated = validated;
             if (wifiNoInternetTint != null) handler.post(MainActivity.this::updateWifiLabel);
+            // Back online (after the TV wakes, the Wi-Fi often comes up after Home): fill in a trending list
+            // that was loaded without the network.
+            if (validated) handler.post(MainActivity.this::retryIncompleteTrending);
         }
     };
     /** Shows the Inputs pill once the TV registers an input: at boot HDMI inputs can appear after Home is shown. */
@@ -1806,8 +1809,17 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 getString(R.string.trending_region), getSharedPreferences("spotify", MODE_PRIVATE));
     }
 
+    /** Loads the trending list again now if the last load ran offline or missed pictures. */
+    private void retryIncompleteTrending() {
+        if (trending == null || !trending.incomplete() || isDestroyed()) return;
+        trendingLoadedAt = 0;
+        refreshTrending();
+    }
+
     private void refreshTrending() {
-        if (trending == null || System.currentTimeMillis() - trendingLoadedAt < 30 * 60 * 1000L) return;
+        if (trending == null) return;
+        // The 30-minute pause is for a list that loaded; one that came back offline is tried again at once.
+        if (!trending.incomplete() && System.currentTimeMillis() - trendingLoadedAt < 30 * 60 * 1000L) return;
         trendingLoadedAt = System.currentTimeMillis();
         trending.load(items -> {
             if (isDestroyed() || items.isEmpty()) return;

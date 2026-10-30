@@ -78,6 +78,10 @@ final class Trending {
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private boolean loading;
     private boolean force;
+    /** The last list handed over is the old one or lacks pictures (offline, say just after the TV wakes). */
+    private volatile boolean incomplete;
+    /** The pictures of the last list handed over, by URL: a reload reuses them instead of losing them. */
+    private volatile Map<String, Bitmap> shown = new HashMap<>();
 
     Trending(Context context, String key, String region, Spotify spotify) {
         this.context = context.getApplicationContext();
@@ -98,6 +102,14 @@ final class Trending {
         return listFile.exists() ? listFile.lastModified() : 0L;
     }
 
+    /**
+     * True when the last list was the cached one after a failed fetch, or some of its pictures could not be
+     * loaded. The network coming back is then worth another try (MainActivity's network callback).
+     */
+    boolean incomplete() {
+        return incomplete;
+    }
+
     /** Like load, but fetches from TMDB and Spotify even when the cached list is still fresh. */
     void refresh(Listener listener) {
         force = true;
@@ -112,21 +124,40 @@ final class Trending {
         force = false;
         io.execute(() -> {
             List<Item> items = new ArrayList<>();
+            boolean stale = false;
             try {
                 boolean fresh = !refetch && listFile.exists() && System.currentTimeMillis() - listFile.lastModified() < MAX_AGE_MS;
                 if (!fresh) {
                     items = fetch();
                     if (!items.isEmpty()) write(items);
                 }
-                if (items.isEmpty() && listFile.exists()) items = read();
-                for (Item item : items) item.image = image(item);
             } catch (Exception ignored) {
-                // Offline or TMDB down: show the older list if there is one, otherwise no shelf.
-                try { if (items.isEmpty() && listFile.exists()) items = read(); } catch (Exception e) { items = new ArrayList<>(); }
+                // Offline or TMDB down (the Wi-Fi is often not back yet when the TV wakes): the older list.
+                items = new ArrayList<>();
+                stale = true;
+            }
+            try {
+                if (items.isEmpty() && listFile.exists()) items = read();
+            } catch (Exception e) {
+                items = new ArrayList<>();
+            }
+            // Pictures for the cached list too: the files are in the cache directory and need no network. Before,
+            // a failed fetch handed over the old list without any, and the card stayed blank until a refresh.
+            Map<String, Bitmap> previous = shown;
+            Map<String, Bitmap> now = new HashMap<>();
+            boolean missing = false;
+            for (Item item : items) {
+                Bitmap reuse = previous.get(item.backdrop);
+                item.image = reuse != null ? reuse : image(item);
+                if (item.image == null) missing = true;
+                else now.put(item.backdrop, item.image);
             }
             final List<Item> result = items;
+            final boolean gaps = stale || missing;
             main.post(() -> {
                 loading = false;
+                shown = now;
+                incomplete = gaps;
                 listener.onItems(result);
             });
         });
@@ -236,16 +267,30 @@ final class Trending {
                 HttpURLConnection c = (HttpURLConnection) new URL(item.backdrop).openConnection();
                 c.setConnectTimeout(8000);
                 c.setReadTimeout(8000);
-                try (InputStream in = c.getInputStream(); FileOutputStream out = new FileOutputStream(f)) {
-                    out.write(readAll(in));
+                byte[] data;
+                try (InputStream in = c.getInputStream()) {
+                    data = readAll(in);
                 } finally {
                     c.disconnect();
+                }
+                // Written whole and then renamed: a download cut off halfway must not leave a file that
+                // exists, so is never fetched again, and never decodes.
+                File part = new File(imageDir, f.getName() + ".part");
+                try (FileOutputStream out = new FileOutputStream(part)) {
+                    out.write(data);
+                }
+                if (!part.renameTo(f)) {
+                    part.delete();
+                    return null;
                 }
             }
             // 565: forty pictures stay around while Home runs, and a photo shows no difference without alpha.
             BitmapFactory.Options opts = new BitmapFactory.Options();
             opts.inPreferredConfig = Bitmap.Config.RGB_565;
-            return BitmapFactory.decodeFile(f.getAbsolutePath(), opts);
+            Bitmap bm = BitmapFactory.decodeFile(f.getAbsolutePath(), opts);
+            // A broken file (an older build could leave one): drop it so the next load downloads it again.
+            if (bm == null) f.delete();
+            return bm;
         } catch (Exception e) {
             return null;
         }
