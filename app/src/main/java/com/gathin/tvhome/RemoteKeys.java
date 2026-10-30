@@ -203,12 +203,7 @@ final class RemoteKeys {
                         AudioManager.ADJUST_TOGGLE_MUTE, AudioManager.FLAG_SHOW_UI);
                 break;
             case "screensaver":
-                // The screensaver chosen in the TV's settings, through the system's "start now" shortcut; the
-                // launcher's own clock where the firmware has no such shortcut.
-                Intent dream = new Intent(Intent.ACTION_MAIN)
-                        .setClassName("com.android.systemui", "com.android.systemui.Somnambulator");
-                if (ctx.getPackageManager().resolveActivity(dream, 0) == null) dream = new Intent(ctx, ClockActivity.class);
-                start(ctx, dream);
+                start(ctx, screensaver(ctx));
                 break;
             case "settings":
                 start(ctx, SystemSettings.intent(ctx, Settings.ACTION_SETTINGS));
@@ -224,6 +219,25 @@ final class RemoteKeys {
         }
         return true;
     }
+
+    /**
+     * The screensaver chosen in the TV's settings, through the system's "start now" shortcut: AOSP's Somnambulator,
+     * or Google TV's sleep action where the firmware has no Somnambulator (the Grundig's Android 14). The
+     * launcher's own clock where it has neither.
+     */
+    private static Intent screensaver(Context ctx) {
+        Intent[] shortcuts = {
+                new Intent(Intent.ACTION_MAIN).setClassName("com.android.systemui", "com.android.systemui.Somnambulator"),
+                new Intent(SLEEP_NOW),
+        };
+        for (Intent i : shortcuts) {
+            if (ctx.getPackageManager().resolveActivity(i, 0) != null) return i;
+        }
+        return new Intent(ctx, ClockActivity.class);
+    }
+
+    /** Google TV's "start the screensaver now", as `adb shell am start -a` takes it. */
+    static final String SLEEP_NOW = "com.google.android.pano.action.SLEEP";
 
     private static void start(Context ctx, Intent intent) {
         try {
