@@ -13,7 +13,8 @@ import android.view.KeyEvent;
 
 /**
  * Screensaver: Home's trending feed full screen (PanScene), each picture panning slowly for 45 s and the next
- * one dissolving in. It answers the remote: OK opens the title in its app, Left and Right change the slide;
+ * one dissolving in. It answers the remote: OK opens the slide as Home's card does (a YouTube trailer itself;
+ * Apple TV and Nuvio only as apps, since TMDB gives no link into them), Left and Right change the slide;
  * any other key wakes the TV. Uses the feed Home already cached, pictures included, so it also runs offline;
  * with no TMDB key or nothing cached yet it shows only the clock over the dot grid.
  */
