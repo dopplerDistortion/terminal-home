@@ -43,6 +43,8 @@ final class Trending {
     private static final int PER_SOURCE = 10;
     private static final String API = "https://api.themoviedb.org/3";
     private static final String IMG = "https://image.tmdb.org/t/p/w780";
+    /** The screensaver's size (TrendingDream): it covers the whole screen and pans, where Home's card is half. */
+    private static final String IMG_LARGE = "https://image.tmdb.org/t/p/w1280";
     private static final int APPLE_TV_PROVIDER = 350;
 
     static final class Item {
@@ -260,11 +262,24 @@ final class Trending {
     }
 
     private Bitmap image(Item item) {
+        return image(item.backdrop);
+    }
+
+    /**
+     * The item's backdrop at w1280 for the screensaver, downloaded once into the same cache, or null (offline
+     * and not cached yet, or not a TMDB picture). Blocking: call it off the main thread.
+     */
+    Bitmap large(Item item) {
+        if (item.backdrop == null || !item.backdrop.startsWith(IMG)) return null;
+        return image(IMG_LARGE + item.backdrop.substring(IMG.length()));
+    }
+
+    private Bitmap image(String url) {
         try {
             if (!imageDir.exists() && !imageDir.mkdirs()) return null;
-            File f = new File(imageDir, Integer.toHexString(item.backdrop.hashCode()) + ".jpg");
+            File f = new File(imageDir, Integer.toHexString(url.hashCode()) + ".jpg");
             if (!f.exists()) {
-                HttpURLConnection c = (HttpURLConnection) new URL(item.backdrop).openConnection();
+                HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
                 c.setConnectTimeout(8000);
                 c.setReadTimeout(8000);
                 byte[] data;
